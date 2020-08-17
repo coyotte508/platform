@@ -194,21 +194,22 @@ func (m *Migration) execute() error {
 }
 
 func (m *Migration) isSessionExpanded(session *session.Session) bool {
-	return session.Duration != 0
+	return session.Extended
 }
 
 func (m *Migration) expandSession(session *session.Session, secret string) error {
 	parsedClaims := struct {
+		IsServer  string   `json:"svr"`
+		UserID    string   `json:"usr"`
+		UserRoles []string `json:"roles,omitempty"`
+		Extended  bool     `json:"ext,omitempty"`
 		jwt.StandardClaims
-		IsServer string  `json:"svr"`
-		UserID   string  `json:"usr"`
-		Duration float64 `json:"dur"`
 	}{}
 
 	keyFunc := func(token *jwt.Token) (interface{}, error) {
 		return []byte(secret), nil
 	}
-	_, err := jwt.ParseWithClaims(session.ID, &parsedClaims, keyFunc)
+	token, err := jwt.ParseWithClaims(session.ID, &parsedClaims, keyFunc)
 	if err != nil {
 		validationError, ok := err.(*jwt.ValidationError)
 		if !ok {
@@ -219,16 +220,22 @@ func (m *Migration) expandSession(session *session.Session, secret string) error
 		}
 	}
 
+	if !token.Valid {
+		return errors.Wrap(nil, "Invalid token")
+	}
+
+	if !parsedClaims.VerifyExpiresAt(time.Now().UTC().Unix(), true) {
+		return errors.Wrap(nil, "Expired token")
+	}
+
 	session.IsServer = parsedClaims.IsServer == "yes"
 	if session.IsServer {
 		session.ServerID = parsedClaims.UserID
 	} else {
 		session.UserID = parsedClaims.UserID
 	}
-	session.Duration = int64(parsedClaims.Duration)
 	session.ExpiresAt = parsedClaims.ExpiresAt
-
-	session.CreatedAt = session.Time
+	session.IssuedAt = parsedClaims.IssuedAt
 
 	return nil
 }
